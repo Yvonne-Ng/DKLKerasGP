@@ -1,0 +1,6 @@
+[submodule "keras-gp"]
+	path = keras-gp
+	url = git@github.com:alshedivat/keras-gp.git
+[submodule "tensorflow"]
+	path = tensorflow
+	url = https://github.com/tensorflow/tensorflow.git
