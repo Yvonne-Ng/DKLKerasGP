@@ -62,12 +62,95 @@ def run():
     args = parse_args()
     ext = args.output_file_extension
 
-    #---Getting background
+    #---Load Data
     fBkg=uproot.open(args.input_file)['DSJ75yStar03_TriggerJets_J75_yStar03_mjj_TLA2016binning']
     #fBkg=uproot.open(args.input_file)['DSJ100yStar06_TriggerJets_J100_yStar06_mjj_TLA2016binning']
     x_bkg, y_bkg, xerr_bkg, yerr_bkg= get_xy_pts(fBkg, FIT_RANGE)
-    print("xbkg: ", x_bkg)
-    print("ybkg: ", y_bkg)
+
+
+    print("loading data ending")
+    #--Setting Train Data and Test Data
+    def oddElements(iList):
+        return [iList[index] for index in range(len(iList)) if index%2==1]
+    def evenElements(iList):
+        return [iList[index] for index in range(len(iList)) if index%2==0]
+    ##---- extracting Training set
+    #X_train=evenElements(x_bkg)
+    #y_train=evenElements(y_bkg)
+    #yerr_train=evenElements(yerr_bkg)
+    ##---- extracting prediction set
+    #X_test=oddElements(x_bkg)
+    #y_test=oddElements(y_bkg)
+    #yerr_test=oddElements(yerr_bkg)
+
+    def formatChange(l):
+        """changing a list to a np array with an extra dimension"""
+        l=np.array(l)
+        output=l[:, np.newaxis]
+        return output
+
+    #---- extracting Training set
+    X_train=formatChange(evenElements(x_bkg))
+    y_train=formatChange(evenElements(y_bkg))
+    #yerr_train=formatChange(evenElements(yerr_bkg))
+    #---- extracting prediction set
+    X_test=formatChange(oddElements(x_bkg))
+    y_test=formatChange(oddElements(y_bkg))
+    #yerr_test=formatChange(oddElements(yerr_bkg))
+
+
+    print("training set setup ending")
+
+   # how is valid and test different in the original example?
+    X_valid, y_valid = X_test, y_test
+
+    data = {
+	    'train': (X_train, y_train),
+	    'valid': (X_valid, y_valid),
+	    'test': (X_test, y_test),
+	}
+   #
+# Model & training parameters
+    input_shape = data['train'][0].shape[1:]
+    output_shape = data['train'][1].shape[1:]
+#?
+    batch_size = 2**10
+    epochs = 500
+
+    print("starting contstruction of model setup")
+    # Construct & compile the model
+    model = assemble_mlp(input_shape, output_shape, batch_size,
+                         nb_train_samples=len(X_train))
+
+    print("starting loss function  setup")
+    loss = [gen_gp_loss(gp) for gp in model.output_layers]
+
+    print("starting compiling")
+    model.compile(optimizer=Adam(1e-4), loss=loss)
+
+    print("got here")
+    # training
+    history = train(model, data, callbacks=[], gp_n_iter=5,epochs=epochs, batch_size=batch_size, verbose=1)
+
+    # Test the model
+    X_test, y_test = data['test']
+    y_preds = model.predict(X_test)
+    rmse_predict = RMSE(y_test, y_preds)
+    print('Test RMSE:', rmse_predict)
+
+
+    #signif, _=res_significance(y_bkg, y_preds, x_bkg,t)
+
+    with Canvas("fit"+".eps") as can:
+        can.ax.set_yscale('log')
+        can.ax.errorbar(X_test, y_test,  fmt='.', color="red", label="testing points")
+        can.ax.errorbar(X_train, y_train, fmt='.', color="k", label="training points")
+        can.ax.plot(X_test, np.squeeze(y_preds), '-r', label="GP Prediction")
+        can.ax.legend(framealpha=0)
+        can.ax.set_ylabel('events')
+        #can.ratio.axhline(0, linewidth=1, alpha=0.5)
+        #can.ratio.set_xlabel(r'$m_{jj}$ [GeV]', ha='right', x=0.98)
+        #can.ratio.set_ylabel('significance')
 
 
 def get_xy_pts(f, x_range=None):
@@ -83,6 +166,64 @@ def get_xy_pts(f, x_range=None):
         low, high = x_range
         ok = (center > low) & (center < high)
     return center[ok], vals[ok], widths[ok], errors[ok]
+
+def standardize_data(X_train, X_test, X_valid):
+    X_mean = np.mean(X_train, axis=0)
+    X_std = np.std(X_train, axis=0)
+
+    X_train -= X_mean
+    X_train /= X_std
+    X_test -= X_mean
+    X_test /= X_std
+    X_valid -= X_mean
+    X_valid /= X_std
+
+    return X_train, X_test, X_valid
+
+def initCovSM(Q, D):
+    print("initCovSM")
+    w0 = np.log(np.ones((Q,1)))
+    mu = np.log(np.maximum(0.05*np.random.rand(Q*D,1),1e-8))
+    v = np.log(np.abs(np.random.randn(Q*D,1) + 1))
+
+    print(" end of initCovSM")
+    return [[w0], [mu], [v]]
+
+def assemble_mlp(input_shape, output_shape, batch_size, nb_train_samples):
+    """Assemble a simple MLP model.
+    """
+    print("assempble_mlp starting")
+    inputs = Input(shape=input_shape)
+    hidden = Dense(200, activation='relu', name='dense1')(inputs)
+    hidden = Dropout(0.5)(hidden)
+    hidden = Dense(50, activation='relu', name='dense2')(hidden)
+    hidden = Dropout(0.5)(hidden)
+    hidden = Dense(25, activation='relu', name='dense3')(hidden)
+    hidden = Dropout(0.25)(hidden)
+    hidden = Dense(2, activation='relu', name='dense4')(hidden)
+
+    print("NN set up completed")
+    gp = GP(hyp={
+                'lik': np.log(0.3),
+                'mean': np.zeros((2,1)).tolist() + [[0]],
+                'cov': initCovSM(6,1),
+            },
+            inf='infGrid', dlik='dlikGrid',
+            opt={'cg_maxit': 2000, 'cg_tol': 1e-6},
+            mean='meanSum', cov='covSM',
+            update_grid=1,
+            grid_kwargs={'eq': 1, 'k': 70.},
+            cov_args=[6],
+            mean_args=['{@meanLinear, @meanConst}'],
+            batch_size=batch_size,
+            nb_train_samples=nb_train_samples)
+    outputs = [gp(hidden)]
+
+    print("gp set up completed")
+
+    print("assempble_mlp ending")
+    return Model(inputs=inputs, outputs=outputs)
+
 
 if __name__ == '__main__':
     run()
