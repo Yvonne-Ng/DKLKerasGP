@@ -4,3 +4,6 @@
 [submodule "tensorflow"]
 	path = tensorflow
 	url = https://github.com/tensorflow/tensorflow.git
+[submodule "gpml"]
+	path = gpml
+	url = https://github.com/alshedivat/gpml.git
