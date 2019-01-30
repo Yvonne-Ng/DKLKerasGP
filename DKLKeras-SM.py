@@ -5,9 +5,10 @@ import numpy as np
 np.random.seed(42)
 
 # Keras
+import keras
 from keras.layers import Input, Dense, Dropout
 from keras.optimizers import RMSprop, Adam
-from keras.callbacks import EarlyStopping
+from keras.callbacks import EarlyStopping, ModelCheckpoint
 
 # KGP
 from kgp.models import Model
@@ -90,8 +91,11 @@ def run():
         return output
 
     #---- extracting Training set
-    X_train=formatChange(evenElements(x_bkg))
-    y_train=formatChange(evenElements(y_bkg))
+    #X_train=formatChange(evenElements(x_bkg))
+    #y_train=formatChange(evenElements(y_bkg))
+    # larger training set
+    X_train=formatChange(x_bkg)
+    y_train=formatChange(y_bkg)
     #yerr_train=formatChange(evenElements(yerr_bkg))
     #---- extracting prediction set
     X_test=formatChange(oddElements(x_bkg))
@@ -112,6 +116,7 @@ def run():
    #
 # Model & training parameters
     input_shape = data['train'][0].shape[1:]
+    print("input shape: ", input_shape)
     output_shape = data['train'][1].shape[1:]
 #?
     batch_size = 2**10
@@ -127,10 +132,20 @@ def run():
 
     print("starting compiling")
     model.compile(optimizer=Adam(1e-4), loss=loss)
+    #model.compile(optimizer=, loss=loss)
 
     print("got here")
+    # Load saved weights (if exist)
+    #if os.path.isfile('checkpoints/msgptrain_TLA.h5'):
+    #    model.load_weights('checkpoints/msgptrain_TLA.h5', by_name=True)
+    #    print("loading from previous check point")
+
+    earlyStopping=keras.callbacks.EarlyStopping(monitor='val_loss', patience=4, verbose=0, mode='auto')
+
+
     # training
-    history = train(model, data, callbacks=[], gp_n_iter=5,epochs=epochs, batch_size=batch_size, verbose=1)
+
+    history = train(model, data, callbacks=[earlyStopping,ModelCheckpoint(filepath='msgptrain_TLA', monitor='val_loss', save_best_only=True) ], gp_n_iter=5,epochs=epochs, batch_size=batch_size, verbose=1,checkpoint='msgptrain_TLA', checkpoint_monitor='val_mse')
 
     # Test the model
     X_test, y_test = data['test']
@@ -193,6 +208,7 @@ def assemble_mlp(input_shape, output_shape, batch_size, nb_train_samples):
     """Assemble a simple MLP model.
     """
     print("assempble_mlp starting")
+    print("inputshape:", input_shape)
     inputs = Input(shape=input_shape)
     hidden = Dense(200, activation='relu', name='dense1')(inputs)
     hidden = Dropout(0.5)(hidden)
@@ -219,9 +235,6 @@ def assemble_mlp(input_shape, output_shape, batch_size, nb_train_samples):
             nb_train_samples=nb_train_samples)
     outputs = [gp(hidden)]
 
-    print("gp set up completed")
-
-    print("assempble_mlp ending")
     return Model(inputs=inputs, outputs=outputs)
 
 
